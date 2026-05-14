@@ -128,13 +128,24 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Odoo env vars not configured' });
 
   try {
-    /* ── Step 1: Authenticate ── */
+    /* ── Step 1: Authenticate as sky@technext.asia ── */
     const uid = await rpc(`${ODOO_URL}/xmlrpc/2/common`, 'authenticate',
       [ODOO_DB, ODOO_USER, ODOO_API_KEY, {}]);
     if (!uid || uid === false)
       return res.status(401).json({ error: 'Odoo authentication failed' });
 
-    /* ── Step 2: Find or create partner ── */
+    /* ── Step 1b: Get sky's partner_id so she appears as the organiser ── */
+    const skyUser = await rpc(`${ODOO_URL}/xmlrpc/2/object`, 'execute_kw', [
+      ODOO_DB, uid, ODOO_API_KEY,
+      'res.users', 'read',
+      [[uid]],
+      { fields: ['partner_id'] }
+    ]);
+    const skyPartnerId = Array.isArray(skyUser) && skyUser[0] && skyUser[0].partner_id
+      ? (Array.isArray(skyUser[0].partner_id) ? skyUser[0].partner_id[0] : skyUser[0].partner_id)
+      : false;
+
+    /* ── Step 2: Find or create the customer partner ── */
     let partnerId = false;
     const existing = await rpc(`${ODOO_URL}/xmlrpc/2/object`, 'execute_kw', [
       ODOO_DB, uid, ODOO_API_KEY,
@@ -163,12 +174,16 @@ export default async function handler(req, res) {
     const stopUTC  = toOdooUTC(slotISO,
       `${pad(hh + SLOT_DURATION_HOURS)}:${pad(mm)}`);
 
-    /* ── Step 4: Create calendar event ── */
+    /* ── Step 4: Create calendar event owned by sky ── */
     const description = [
       service ? `Service interest: ${service}` : '',
       phone   ? `Phone: ${phone}`               : '',
       company ? `Company: ${company}`           : ''
     ].filter(Boolean).join('\n');
+
+    // Build attendee list: always include sky + the customer
+    const attendees = [[4, partnerId]];
+    if (skyPartnerId && skyPartnerId !== partnerId) attendees.push([4, skyPartnerId]);
 
     const eventId = await rpc(`${ODOO_URL}/xmlrpc/2/object`, 'execute_kw', [
       ODOO_DB, uid, ODOO_API_KEY,
@@ -179,7 +194,8 @@ export default async function handler(req, res) {
         stop:                stopUTC,
         appointment_type_id: APPT_TYPE_ID,
         description:         description,
-        partner_ids:         [[4, partnerId]],   // (4, id) = link existing
+        user_id:             uid,          // sky is the organiser
+        partner_ids:         attendees,    // sky + customer as attendees
         active:              true
       }]
     ]);
