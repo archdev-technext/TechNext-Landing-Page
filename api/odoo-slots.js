@@ -1,17 +1,96 @@
 /**
  * GET /api/odoo-slots?year=YYYY&month=M
  *
- * Returns all booked appointment slots from Odoo for the given month.
- * Slots are expressed as 'YYYY-MM-DD_HH:MM' strings in SGT (UTC+8),
- * matching the BK_TIMES_24 keys used in the frontend calendar.
- *
- * Since the appointment duration is 1 hour and the calendar shows 30-min
- * increments, each Odoo event blocks every 30-min slot it overlaps.
+ * Returns booked appointment slots from Odoo for the given month.
+ * Uses XML-RPC (API-key compatible) instead of session auth.
+ * Slots are expressed as 'YYYY-MM-DD_HH:MM' strings in SGT (UTC+8).
  */
 
-// Must match BK_TIMES_24 in index.html
-// Odoo availability: 09:00–12:00 and 14:00–17:00, 1-hr duration, 1-hr step
 const BK_TIMES_24 = ['09:00','10:00','11:00','14:00','15:00','16:00'];
+
+// ── Minimal XML-RPC client ────────────────────────────────────────────────────
+
+function toXml(val) {
+  if (val === null || val === undefined) return '<value><boolean>0</boolean></value>';
+  if (typeof val === 'boolean')          return `<value><boolean>${val?1:0}</boolean></value>`;
+  if (typeof val === 'number' && Number.isInteger(val)) return `<value><int>${val}</int></value>`;
+  if (typeof val === 'number')           return `<value><double>${val}</double></value>`;
+  if (typeof val === 'string') {
+    const e = val.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return `<value><string>${e}</string></value>`;
+  }
+  if (Array.isArray(val)) {
+    return `<value><array><data>${val.map(toXml).join('')}</data></array></value>`;
+  }
+  if (typeof val === 'object') {
+    const m = Object.entries(val)
+      .map(([k,v]) => `<member><name>${k}</name>${toXml(v)}</member>`)
+      .join('');
+    return `<value><struct>${m}</struct></value>`;
+  }
+  return `<value><string>${String(val)}</string></value>`;
+}
+
+function buildCall(method, params) {
+  return `<?xml version="1.0"?><methodCall><methodName>${method}</methodName><params>${
+    params.map(p => `<param>${toXml(p)}</param>`).join('')
+  }</params></methodCall>`;
+}
+
+function parseVal(s) {
+  s = s.trim();
+  let m;
+  if ((m = s.match(/^<(?:int|i4|i8)>([\s\S]*?)<\/(?:int|i4|i8)>$/))) return parseInt(m[1], 10);
+  if ((m = s.match(/^<boolean>([\s\S]*?)<\/boolean>$/)))               return m[1].trim() === '1';
+  if ((m = s.match(/^<string>([\s\S]*?)<\/string>$/s)))
+    return m[1].replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>');
+  if ((m = s.match(/^<double>([\s\S]*?)<\/double>$/)))                 return parseFloat(m[1]);
+  if ((m = s.match(/^<array>\s*<data>([\s\S]*?)<\/data>\s*<\/array>$/s))) return parseArray(m[1]);
+  if ((m = s.match(/^<struct>([\s\S]*?)<\/struct>$/s)))                return parseStruct(m[1]);
+  return s.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>');
+}
+
+function parseArray(inner) {
+  const items = [];
+  let depth = 0, start = -1, i = 0;
+  while (i < inner.length) {
+    if (inner.startsWith('<value>', i))  { if (depth++ === 0) start = i + 7; i += 7; }
+    else if (inner.startsWith('</value>', i)) {
+      if (--depth === 0 && start >= 0) { items.push(parseVal(inner.slice(start, i).trim())); start = -1; }
+      i += 8;
+    } else { i++; }
+  }
+  return items;
+}
+
+function parseStruct(inner) {
+  const obj = {};
+  const re = /<member>\s*<name>([\s\S]*?)<\/name>\s*<value>([\s\S]*?)<\/value>\s*<\/member>/g;
+  let m;
+  while ((m = re.exec(inner)) !== null) obj[m[1]] = parseVal(m[2].trim());
+  return obj;
+}
+
+function parseResponse(xml) {
+  if (/<fault>/.test(xml)) {
+    const m = xml.match(/<name>faultString<\/name>\s*<value>\s*<string>([\s\S]*?)<\/string>/);
+    throw new Error(m ? m[1] : 'XML-RPC fault');
+  }
+  const m = xml.match(/<params>\s*<param>\s*<value>([\s\S]*?)<\/value>\s*<\/param>\s*<\/params>/s);
+  if (!m) throw new Error('Invalid XML-RPC response');
+  return parseVal(m[1].trim());
+}
+
+async function rpc(url, method, params) {
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/xml' },
+    body: buildCall(method, params)
+  });
+  return parseResponse(await resp.text());
+}
+
+// ── Handler ───────────────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -29,105 +108,62 @@ export default async function handler(req, res) {
   const ODOO_API_KEY = process.env.ODOO_API_KEY;
   const APPT_TYPE_ID = parseInt(process.env.ODOO_APPT_TYPE_ID || '2', 10);
 
-  if (!ODOO_URL || !ODOO_DB || !ODOO_USER || !ODOO_API_KEY) {
+  if (!ODOO_URL || !ODOO_DB || !ODOO_USER || !ODOO_API_KEY)
     return res.status(500).json({ error: 'Odoo env vars not configured' });
-  }
 
-  const yr = parseInt(year, 10);
-  const mo = parseInt(month, 10); // 1-indexed
+  const yr = parseInt(year,  10);
+  const mo = parseInt(month, 10);
 
-  // Build UTC search window: cover full month in SGT (UTC+8)
-  // Start = 1st of month at 00:00 SGT = 1st at 16:00 UTC (prev day)
-  // End   = 1st of next month at 23:59 SGT = 2nd at 15:59 UTC
-  const startUTC = new Date(Date.UTC(yr, mo - 1, 1, 0, 0, 0) - 8 * 3600 * 1000);
-  const endUTC   = new Date(Date.UTC(yr, mo,     1, 0, 0, 0) + 16 * 3600 * 1000);
-  const pad = n => String(n).padStart(2, '0');
+  const startUTC = new Date(Date.UTC(yr, mo-1, 1, 0,0,0) - 8*3600*1000);
+  const endUTC   = new Date(Date.UTC(yr, mo,   1, 0,0,0) + 16*3600*1000);
+  const pad = n => String(n).padStart(2,'0');
   const fmtUTC = d =>
-    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
+    `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ` +
     `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:00`;
 
   try {
-    /* ── Step 1: Authenticate ── */
-    const authResp = await fetch(`${ODOO_URL}/web/session/authenticate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0', method: 'call', id: 1,
-        params: { db: ODOO_DB, login: ODOO_USER, password: ODOO_API_KEY }
-      })
-    });
-    const authData = await authResp.json();
-    if (!authData.result || authData.result.uid === false) {
-      return res.status(401).json({
-        error: 'Odoo authentication failed',
-        odoo_url: ODOO_URL,
-        odoo_db: ODOO_DB,
-        odoo_user: ODOO_USER,
-        odoo_error: authData.error?.data?.message || authData.result?.uid,
-      });
+    /* ── Step 1: Authenticate via XML-RPC ── */
+    const uid = await rpc(`${ODOO_URL}/xmlrpc/2/common`, 'authenticate',
+      [ODOO_DB, ODOO_USER, ODOO_API_KEY, {}]);
+
+    if (!uid || uid === false) {
+      return res.status(401).json({ error: 'Odoo authentication failed' });
     }
-    const setCookie    = authResp.headers.get('set-cookie') || '';
-    const sessionMatch = setCookie.match(/session_id=([^;,\s]+)/);
-    const sessionId    = sessionMatch?.[1] || authData.result?.session_id || '';
 
     /* ── Step 2: Fetch booked calendar events ── */
-    const dataResp = await fetch(`${ODOO_URL}/web/dataset/call_kw`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Cookie': `session_id=${sessionId}`
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0', method: 'call', id: 2,
-        params: {
-          model: 'calendar.event',
-          method: 'search_read',
-          args: [[
-            ['appointment_type_id', '=', APPT_TYPE_ID],
-            ['start', '>=', fmtUTC(startUTC)],
-            ['start', '<',  fmtUTC(endUTC)],
-            ['active', '=', true]
-          ]],
-          kwargs: {
-            fields: ['start', 'stop', 'name'],
-            limit: 500
-          }
-        }
-      })
-    });
-    const data = await dataResp.json();
-    if (data.error) {
-      console.error('Odoo search_read error:', data.error);
-      return res.status(500).json({ error: data.error.data?.message || 'Odoo query failed' });
-    }
+    const events = await rpc(`${ODOO_URL}/xmlrpc/2/object`, 'execute_kw', [
+      ODOO_DB, uid, ODOO_API_KEY,
+      'calendar.event', 'search_read',
+      [[
+        ['appointment_type_id', '=', APPT_TYPE_ID],
+        ['start', '>=', fmtUTC(startUTC)],
+        ['start', '<',  fmtUTC(endUTC)],
+        ['active', '=', true]
+      ]],
+      { fields: ['start', 'stop', 'name'], limit: 500 }
+    ]);
 
-    /* ── Step 3: Convert events → blocked 30-min slot keys ── */
-    // SGT = UTC + 8h
+    /* ── Step 3: Convert events → blocked slot keys ── */
     const SGT = 8 * 3600 * 1000;
     const bookedSet = new Set();
 
-    for (const evt of data.result || []) {
-      // Parse Odoo UTC datetime strings → SGT Date objects
-      const startSGT = new Date(new Date(evt.start.replace(' ', 'T') + 'Z').getTime() + SGT);
-      const stopSGT  = new Date(new Date(evt.stop.replace(' ', 'T')  + 'Z').getTime() + SGT);
+    for (const evt of (Array.isArray(events) ? events : [])) {
+      const startSGT = new Date(new Date(evt.start.replace(' ','T')+'Z').getTime() + SGT);
+      const stopSGT  = new Date(new Date(evt.stop.replace(' ','T') +'Z').getTime() + SGT);
 
       const dateStr = `${startSGT.getUTCFullYear()}-` +
-                      `${pad(startSGT.getUTCMonth() + 1)}-` +
+                      `${pad(startSGT.getUTCMonth()+1)}-` +
                       `${pad(startSGT.getUTCDate())}`;
 
-      // Event boundaries in minutes-since-midnight (SGT)
-      const evtStartMin = startSGT.getUTCHours() * 60 + startSGT.getUTCMinutes();
-      const evtStopMin  = stopSGT.getUTCHours()  * 60 + stopSGT.getUTCMinutes();
+      const evtStartMin = startSGT.getUTCHours()*60 + startSGT.getUTCMinutes();
+      const evtStopMin  = stopSGT.getUTCHours() *60 + stopSGT.getUTCMinutes();
 
-      // Block every 1-hr slot that overlaps with the event
       for (const t of BK_TIMES_24) {
-        const [hh, mm] = t.split(':').map(Number);
-        const slotStartMin = hh * 60 + mm;
-        const slotStopMin  = slotStartMin + 60;
-        // Overlap: slot_start < evt_stop AND slot_stop > evt_start
-        if (slotStartMin < evtStopMin && slotStopMin > evtStartMin) {
+        const [hh, mm]   = t.split(':').map(Number);
+        const slotStart  = hh*60 + mm;
+        const slotStop   = slotStart + 60;
+        if (slotStart < evtStopMin && slotStop > evtStartMin)
           bookedSet.add(`${dateStr}_${t}`);
-        }
       }
     }
 
