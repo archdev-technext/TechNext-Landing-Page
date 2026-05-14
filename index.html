@@ -1626,9 +1626,15 @@
             <input class="bk-email-input" id="bkPhoneInput" type="tel" placeholder="+65 9123 4567" oninput="bkCheckConfirm()"/>
           </div>
         </div>
-        <div class="bk-email-wrap">
-          <span class="bk-email-label">Email — confirmation will be sent here</span>
-          <input class="bk-email-input" id="bkEmailInput" type="email" placeholder="john@company.com" oninput="bkCheckConfirm()"/>
+        <div class="bk-fields-row">
+          <div class="bk-email-wrap">
+            <span class="bk-email-label">Email — confirmation sent here</span>
+            <input class="bk-email-input" id="bkEmailInput" type="email" placeholder="john@company.com" oninput="bkCheckConfirm()"/>
+          </div>
+          <div class="bk-email-wrap">
+            <span class="bk-email-label">Company <span style="font-weight:400;text-transform:none;">(optional)</span></span>
+            <input class="bk-email-input" id="bkCompanyInput" type="text" placeholder="Your company name"/>
+          </div>
         </div>
         <button class="bk-confirm-btn" id="bkConfirmBtn" disabled onclick="bkConfirm()">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" width="14" height="14"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>
@@ -1714,12 +1720,15 @@
       document.getElementById('bkFmt12').classList.add('active');
       document.getElementById('bkFmt24').classList.remove('active');
       // Pre-fill from main form if available
-      const formName  = (document.getElementById('f-fname') || {}).value || '';
-      const formPhone = (document.getElementById('f-phone') || {}).value || '';
-      const formEmail = (document.getElementById('f-email') || {}).value || '';
-      document.getElementById('bkNameInput').value  = formName;
-      document.getElementById('bkPhoneInput').value = formPhone;
-      document.getElementById('bkEmailInput').value = formEmail;
+      const formName    = (document.getElementById('f-fname')   || {}).value || '';
+      const formPhone   = (document.getElementById('f-phone')   || {}).value || '';
+      const formEmail   = (document.getElementById('f-email')   || {}).value || '';
+      const formCompany = (document.getElementById('f-company') || {}).value || '';
+      document.getElementById('bkNameInput').value    = formName;
+      document.getElementById('bkPhoneInput').value   = formPhone;
+      document.getElementById('bkEmailInput').value   = formEmail;
+      document.getElementById('bkCompanyInput').value = formCompany;
+      bkCheckConfirm();   // enable Confirm button immediately if all fields pre-filled
       bkLoadSlots(bkViewYear, bkViewMonth);
       bkRenderSlots();
       bkRenderCal();
@@ -1742,6 +1751,7 @@
       document.getElementById('bkSuccess').classList.remove('show');
       document.querySelector('.bk-mid').style.display = '';
       document.getElementById('bkRight').style.display = '';
+      document.querySelector('.bk-foot').style.display = '';   // restore footer
     }
 
     function bkOverlayClick(e) {
@@ -1973,7 +1983,8 @@
       const name    = document.getElementById('bkNameInput').value.trim();
       const phone   = document.getElementById('bkPhoneInput').value.trim();
       const email   = document.getElementById('bkEmailInput').value.trim();
-      const company = (document.getElementById('f-company') || {}).value?.trim() || '';
+      const company = document.getElementById('bkCompanyInput').value.trim() ||
+                       (document.getElementById('f-company') || {}).value?.trim() || '';
       const service = document.querySelector('.spick.sel')?.dataset.val || '';
       const timeIdx    = (bkFmt === 12 ? BK_TIMES_12 : BK_TIMES_24).indexOf(bkSelTime);
       const slotTime24 = BK_TIMES_24[timeIdx] || '';
