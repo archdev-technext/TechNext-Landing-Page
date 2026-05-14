@@ -1969,20 +1969,7 @@
       document.getElementById('fsDone').style.display = 'block';
       const slotEl = document.getElementById('fsDoneSlot');
       if (slotEl) slotEl.textContent = slot;
-      // Send confirmation + internal notification (fire-and-forget)
-      const email   = document.getElementById('bkEmailInput').value.trim();
-      const name    = document.getElementById('bkNameInput').value.trim()  || (document.getElementById('f-fname')  || {}).value.trim() || '';
-      const phone   = document.getElementById('bkPhoneInput').value.trim() || (document.getElementById('f-phone')  || {}).value.trim() || '';
-      const company = (document.getElementById('f-company') || {}).value.trim() || '';
-      const service    = document.querySelector('.spick.sel')?.dataset.val || '';
-      const timeIdx    = (bkFmt === 12 ? BK_TIMES_12 : BK_TIMES_24).indexOf(bkSelTime);
-      const slotTime24 = BK_TIMES_24[timeIdx] || '';
-      const slotISO    = bkSelDate.getFullYear() + '-' + String(bkSelDate.getMonth()+1).padStart(2,'0') + '-' + String(bkSelDate.getDate()).padStart(2,'0');
-      fetch('https://tech-next-landing-page.vercel.app/api/send-confirmation', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, slot, phone, company, service, slotISO, slotTime24 })
-      }).then(r => r.json()).then(d => console.log('Email result:', d)).catch(err => console.warn('Confirmation email error:', err));
+      // Confirmation email via Brevo removed — handled by Odoo directly
     }
 
 
