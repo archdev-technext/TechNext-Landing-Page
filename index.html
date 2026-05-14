@@ -1809,6 +1809,16 @@
       const yyyy = date.getFullYear();
       const mm   = String(date.getMonth() + 1).padStart(2, '0');
       const dd   = String(date.getDate()).padStart(2, '0');
+      // Block past time slots for today (user's local time, assumed SGT)
+      const now = new Date();
+      const isToday = yyyy === now.getFullYear() &&
+                      date.getMonth() === now.getMonth() &&
+                      date.getDate()  === now.getDate();
+      if (isToday) {
+        const [slotH, slotM] = t.split(':').map(Number);
+        // Block if the slot start is ≤ now + 60 min (need at least 1 hr notice)
+        if (slotH * 60 + slotM <= now.getHours() * 60 + now.getMinutes() + 60) return true;
+      }
       return !!BK_BOOKED_MAP[`${yyyy}-${mm}-${dd}_${t}`];
     }
     function bkGetAvailCount(date) {
@@ -1995,7 +2005,10 @@
         const slotEl = document.getElementById('fsDoneSlot');
         if (slotEl) slotEl.textContent = slot;
         // Mark slot as booked locally so calendar updates immediately
-        try { if (slotISO && slotTime24 && typeof bkBooked !== 'undefined') bkBooked.add(slotISO + '_' + slotTime24); } catch(e) {}
+        if (slotISO && slotTime24) {
+          BK_BOOKED_MAP[slotISO + '_' + slotTime24] = true;
+          bkRenderCal();
+        }
       })
       .catch(err => {
         console.error('Booking error:', err);

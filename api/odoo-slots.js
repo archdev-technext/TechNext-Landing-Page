@@ -130,12 +130,14 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: 'Odoo authentication failed' });
     }
 
-    /* ── Step 2: Fetch booked calendar events ── */
+    /* ── Step 2: Fetch booked calendar events ──
+       Fetch ALL active calendar events in the date range (not just a single
+       appointment type) so manually-created meetings and appointments booked
+       via any channel all block the corresponding website slots.              */
     const events = await rpc(`${ODOO_URL}/xmlrpc/2/object`, 'execute_kw', [
       ODOO_DB, uid, ODOO_API_KEY,
       'calendar.event', 'search_read',
       [[
-        ['appointment_type_id', '=', APPT_TYPE_ID],
         ['start', '>=', fmtUTC(startUTC)],
         ['start', '<',  fmtUTC(endUTC)],
         ['active', '=', true]
@@ -156,7 +158,15 @@ export default async function handler(req, res) {
                       `${pad(startSGT.getUTCDate())}`;
 
       const evtStartMin = startSGT.getUTCHours()*60 + startSGT.getUTCMinutes();
-      const evtStopMin  = stopSGT.getUTCHours() *60 + stopSGT.getUTCMinutes();
+      // If the event stop falls on a LATER calendar day in SGT (e.g. all-day
+      // events, or anything spanning midnight), treat it as blocking until
+      // end-of-day (1440 min) so all slots on the start date are blocked.
+      const stopOnSameDay = stopSGT.getUTCFullYear() === startSGT.getUTCFullYear() &&
+                            stopSGT.getUTCMonth()    === startSGT.getUTCMonth()    &&
+                            stopSGT.getUTCDate()     === startSGT.getUTCDate();
+      const evtStopMin = stopOnSameDay
+        ? stopSGT.getUTCHours()*60 + stopSGT.getUTCMinutes()
+        : 24 * 60;   // spans into next day → block all remaining slots
 
       for (const t of BK_TIMES_24) {
         const [hh, mm]   = t.split(':').map(Number);
