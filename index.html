@@ -1995,7 +1995,7 @@
         const slotEl = document.getElementById('fsDoneSlot');
         if (slotEl) slotEl.textContent = slot;
         // Mark slot as booked locally so calendar updates immediately
-        if (slotISO && slotTime24) bkBooked.add(slotISO + '_' + slotTime24);
+        try { if (slotISO && slotTime24 && typeof bkBooked !== 'undefined') bkBooked.add(slotISO + '_' + slotTime24); } catch(e) {}
       })
       .catch(err => {
         console.error('Booking error:', err);
