@@ -1950,26 +1950,59 @@
 
     function bkConfirm() {
       if (!bkSelDate || !bkSelTime) return;
+
+      const btn = document.getElementById('bkConfirmBtn');
+      btn.disabled = true;
+      btn.textContent = 'Booking…';
+
       const day  = BK_DAYS_S[bkSelDate.getDay()];
       const mon  = BK_MONTHS_S[bkSelDate.getMonth()];
       const date = bkSelDate.getDate();
       const slot = day + ', ' + mon + ' ' + date + ' · ' + bkSelTime + ' SGT';
-      // Show success inside modal
-      document.getElementById('bkSuccessSlot').textContent = slot;
-      document.querySelector('.bk-mid').style.display = 'none';
-      document.getElementById('bkRight').style.display = 'none';
-      document.querySelector('.bk-foot').style.display = 'none';
-      document.getElementById('bkSuccess').classList.add('show');
-      // Mark step 3 done in the form card
-      document.getElementById('dot3').classList.remove('active');
-      document.getElementById('dot3').classList.add('done');
-      document.querySelector('.form-heading').textContent = 'All Set!';
-      document.querySelector('.form-subhead').textContent = 'See you at your demo — talk soon!';
-      document.getElementById('fsPending').style.display = 'none';
-      document.getElementById('fsDone').style.display = 'block';
-      const slotEl = document.getElementById('fsDoneSlot');
-      if (slotEl) slotEl.textContent = slot;
-      // Confirmation email via Brevo removed — handled by Odoo directly
+
+      const name    = document.getElementById('bkNameInput').value.trim();
+      const phone   = document.getElementById('bkPhoneInput').value.trim();
+      const email   = document.getElementById('bkEmailInput').value.trim();
+      const company = (document.getElementById('f-company') || {}).value?.trim() || '';
+      const service = document.querySelector('.spick.sel')?.dataset.val || '';
+      const timeIdx    = (bkFmt === 12 ? BK_TIMES_12 : BK_TIMES_24).indexOf(bkSelTime);
+      const slotTime24 = BK_TIMES_24[timeIdx] || '';
+      const slotISO    = bkSelDate.getFullYear() + '-' +
+                         String(bkSelDate.getMonth()+1).padStart(2,'0') + '-' +
+                         String(bkSelDate.getDate()).padStart(2,'0');
+
+      fetch('/api/book-appointment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, phone, company, service, slotISO, slotTime24 })
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) throw new Error(data.error);
+        // Show success screen
+        document.getElementById('bkSuccessSlot').textContent = slot;
+        document.querySelector('.bk-mid').style.display = 'none';
+        document.getElementById('bkRight').style.display = 'none';
+        document.querySelector('.bk-foot').style.display = 'none';
+        document.getElementById('bkSuccess').classList.add('show');
+        // Update form card
+        document.getElementById('dot3').classList.remove('active');
+        document.getElementById('dot3').classList.add('done');
+        document.querySelector('.form-heading').textContent = 'All Set!';
+        document.querySelector('.form-subhead').textContent = 'See you at your demo — talk soon!';
+        document.getElementById('fsPending').style.display = 'none';
+        document.getElementById('fsDone').style.display = 'block';
+        const slotEl = document.getElementById('fsDoneSlot');
+        if (slotEl) slotEl.textContent = slot;
+        // Mark slot as booked locally so calendar updates immediately
+        if (slotISO && slotTime24) bkBooked.add(slotISO + '_' + slotTime24);
+      })
+      .catch(err => {
+        console.error('Booking error:', err);
+        btn.disabled = false;
+        btn.textContent = 'Confirm Booking';
+        alert('Something went wrong — please try again or contact us at hello@technext.asia');
+      });
     }
 
 
